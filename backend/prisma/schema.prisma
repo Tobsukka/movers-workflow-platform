@@ -1,0 +1,91 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  role          Role      @default(EMPLOYEE)
+  phone         String?
+  address       String?
+  jobs          Job[]    @relation("JobEmployees")
+  shifts        Shift[]
+  verified      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Job {
+  id                String    @id @default(cuid())
+  title             String
+  description       String
+  status            JobStatus
+  pickupLocation    String
+  deliveryLocation  String
+  date              DateTime
+  estimatedHours    Int
+  numberOfMovers    Int
+  items             String[]
+  specialRequirements String?
+  customerName      String
+  customerPhone     String
+  customerEmail     String?
+  floorNumber       Int?
+  hasElevator       Boolean   @default(false)
+  employees         User[]    @relation("JobEmployees")
+  shifts           Shift[]
+  price             Float
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+}
+
+model Shift {
+  id                String         @id @default(cuid())
+  employee          User          @relation(fields: [employeeId], references: [id])
+  employeeId        String
+  job              Job           @relation(fields: [jobId], references: [id])
+  jobId            String
+  startTime        DateTime
+  endTime          DateTime
+  status           ShiftStatus   @default(SCHEDULED)
+  location         String?
+  notes            String?
+  challenges       String?
+  customerSignature String?
+  photos           String[]      @default([])
+  breakMinutes     Int           @default(0)
+  additionalExpenses Json?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  @@index([employeeId])
+  @@index([jobId])
+}
+
+enum Role {
+  ADMIN
+  EMPLOYER
+  EMPLOYEE
+}
+
+enum JobStatus {
+  AVAILABLE
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+} 
