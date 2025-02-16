@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import { protect, restrictTo } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
+import { ensureAuth } from '../middleware/auth';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -10,8 +11,9 @@ const prisma = new PrismaClient();
 // Get current user
 router.get('/me', protect, async (req, res, next) => {
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user?.id },
+    const user = ensureAuth(req);
+    const currentUser = await prisma.user.findUnique({
+      where: { id: user.id },
       select: {
         id: true,
         email: true,
@@ -24,14 +26,14 @@ router.get('/me', protect, async (req, res, next) => {
       },
     });
 
-    if (!user) {
+    if (!currentUser) {
       throw new AppError('User not found', 404);
     }
 
     res.status(200).json({
       status: 'success',
       data: {
-        user,
+        user: currentUser,
       },
     });
   } catch (error) {
@@ -76,14 +78,15 @@ router.get('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next)
 // Get user by ID
 router.get('/:id', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
 
     // Users can only access their own data unless they are employers
-    if (req.user?.role === 'EMPLOYEE' && req.user.id !== id) {
+    if (user.role === 'EMPLOYEE' && user.id !== id) {
       throw new AppError('You do not have permission to perform this action', 403);
     }
 
-    const user = await prisma.user.findUnique({
+    const userData = await prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
@@ -97,14 +100,14 @@ router.get('/:id', protect, async (req, res, next) => {
       },
     });
 
-    if (!user) {
+    if (!userData) {
       throw new AppError('User not found', 404);
     }
 
     res.status(200).json({
       status: 'success',
       data: {
-        user,
+        user: userData,
       },
     });
   } catch (error) {
@@ -115,16 +118,17 @@ router.get('/:id', protect, async (req, res, next) => {
 // Update user
 router.put('/:id', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
 
     // Users can only update their own data
-    if (req.user?.id !== id) {
+    if (user.id !== id) {
       throw new AppError('You do not have permission to perform this action', 403);
     }
 
     const data = updateUserSchema.parse(req.body);
 
-    const user = await prisma.user.update({
+    const updatedUser = await prisma.user.update({
       where: { id },
       data,
       select: {
@@ -142,7 +146,7 @@ router.put('/:id', protect, async (req, res, next) => {
     res.status(200).json({
       status: 'success',
       data: {
-        user,
+        user: updatedUser,
       },
     });
   } catch (error) {

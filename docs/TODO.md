@@ -3,14 +3,10 @@
 ## High Priority
 
 ### Security & Authentication
-- [ ] Implement password reset functionality
-- [ ] Add email verification for new accounts
 - [ ] Set up rate limiting for all sensitive endpoints
-- [ ] Implement two-factor authentication (2FA) option
 - [ ] Add brute force protection for login attempts
 - [ ] Set up security headers with Helmet
 - [ ] Implement CSRF protection
-- [ ] Add API key management for external integrations
 
 ### Testing
 - [ ] Write unit tests for all backend services
@@ -32,26 +28,16 @@
 
 ### Features
 - [ ] Implement notifications system
-- [ ] Add export functionality for reports
 - [ ] Create admin dashboard
-- [ ] Implement file upload for documents
 - [ ] Add calendar view for shifts
 - [ ] Create reporting system
-
-### Documentation
-- [ ] Create user manual
 
 ## Low Priority
 
 ### Analytics & Reporting
 - [ ] Implement advanced analytics
-- [ ] Add custom report builder
-- [ ] Add data visualization components
 - [ ] Implement business intelligence features
 
-### Optimization
-- [ ] Add image optimization
-- [ ] Optimize database indexes
 
 ### Integration
 - [ ] Add OAuth providers

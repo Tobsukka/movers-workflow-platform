@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import { protect, restrictTo } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
+import { ensureAuth } from '../middleware/auth';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -10,6 +11,7 @@ const prisma = new PrismaClient();
 // Validation schemas
 const createShiftSchema = z.object({
   employeeId: z.string(),
+  jobId: z.string(),
   startTime: z.string().transform((str) => new Date(str)),
   endTime: z.string().transform((str) => new Date(str)),
   location: z.string().optional(),
@@ -39,17 +41,18 @@ const completeShiftSchema = z.object({
 // Get all shifts
 router.get('/', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     // For employees, only return their shifts
     // For employers, check if myShifts query param is present
     const whereClause = {
-      ...(req.user?.role === 'EMPLOYEE' 
+      ...(user.role === 'EMPLOYEE' 
         ? { 
-            employeeId: req.user.id,
+            employeeId: user.id,
             status: { not: 'COMPLETED' } // Exclude completed shifts for employees
           }
         : req.query.myShifts === 'true'
           ? { 
-              job: { employees: { some: { id: req.user?.id } } },
+              job: { employees: { some: { id: user.id } } },
               status: { not: 'COMPLETED' } // Exclude completed shifts for myShifts
             }
           : {}),
@@ -111,6 +114,15 @@ router.post('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next
       throw new AppError('Employee is not verified', 400);
     }
 
+    // Validate job exists
+    const job = await prisma.job.findUnique({
+      where: { id: data.jobId },
+    });
+
+    if (!job) {
+      throw new AppError('Job not found', 404);
+    }
+
     // Validate shift times
     if (data.startTime >= data.endTime) {
       throw new AppError('Start time must be before end time', 400);
@@ -143,7 +155,11 @@ router.post('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next
 
     const shift = await prisma.shift.create({
       data: {
-        ...data,
+        employeeId: data.employeeId,
+        jobId: data.jobId,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        location: data.location,
         status: 'SCHEDULED',
       },
       include: {
@@ -152,6 +168,13 @@ router.post('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next
             id: true,
             name: true,
             email: true,
+          },
+        },
+        job: {
+          select: {
+            id: true,
+            title: true,
+            description: true,
           },
         },
       },
@@ -171,6 +194,7 @@ router.post('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next
 // Get shift by ID
 router.get('/:id', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
 
     const shift = await prisma.shift.findUnique({
@@ -198,7 +222,7 @@ router.get('/:id', protect, async (req, res, next) => {
     }
 
     // Employees can only view their own shifts
-    if (req.user?.role === 'EMPLOYEE' && shift.employeeId !== req.user.id) {
+    if (user.role === 'EMPLOYEE' && shift.employeeId !== user.id) {
       throw new AppError('You do not have permission to view this shift', 403);
     }
 
@@ -216,6 +240,7 @@ router.get('/:id', protect, async (req, res, next) => {
 // Update shift
 router.put('/:id', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
     const data = updateShiftSchema.parse(req.body);
 
@@ -239,18 +264,18 @@ router.put('/:id', protect, async (req, res, next) => {
     }
 
     // Check permissions based on role
-    if (req.user?.role === 'EMPLOYEE') {
+    if (user.role === 'EMPLOYEE') {
       // Employees can only update their own shifts
-      if (shift.employeeId !== req.user.id) {
+      if (shift.employeeId !== user.id) {
         throw new AppError('You do not have permission to update this shift', 403);
       }
       // Employees can only update status
       if (Object.keys(data).some((key) => key !== 'status')) {
         throw new AppError('You can only update the shift status', 403);
       }
-    } else if (req.user?.role === 'EMPLOYER') {
+    } else if (user.role === 'EMPLOYER') {
       // Employers can only update shifts for jobs they're assigned to
-      const isAssignedToJob = shift.job.employees.some(emp => emp.id === req.user.id);
+      const isAssignedToJob = shift.job.employees.some(emp => emp.id === user.id);
       if (!isAssignedToJob) {
         throw new AppError('You do not have permission to update this shift', 403);
       }
@@ -313,6 +338,7 @@ router.delete('/:id', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res,
 // Complete shift (employee and employer)
 router.post('/:id/complete', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
     const data = completeShiftSchema.parse(req.body);
 
@@ -337,14 +363,14 @@ router.post('/:id/complete', protect, async (req, res, next) => {
     }
 
     // Check permissions based on role
-    if (req.user?.role === 'EMPLOYEE') {
+    if (user.role === 'EMPLOYEE') {
       // Employees can only complete their own shifts
-      if (shift.employeeId !== req.user.id) {
+      if (shift.employeeId !== user.id) {
         throw new AppError('You do not have permission to complete this shift', 403);
       }
-    } else if (req.user?.role === 'EMPLOYER') {
+    } else if (user.role === 'EMPLOYER') {
       // Employers can only complete shifts for jobs they're assigned to
-      const isAssignedToJob = shift.job.employees.some(emp => emp.id === req.user.id);
+      const isAssignedToJob = shift.job.employees.some(emp => emp.id === user.id);
       if (!isAssignedToJob) {
         throw new AppError('You do not have permission to complete this shift', 403);
       }

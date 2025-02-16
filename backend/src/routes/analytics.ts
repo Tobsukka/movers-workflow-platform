@@ -1,7 +1,14 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { protect, restrictTo } from '../middleware/auth';
+import { protect, restrictTo, ensureAuth } from '../middleware/auth';
 import { startOfDay, endOfDay, startOfWeek, endOfWeek } from 'date-fns';
+
+// Add type definition for weekly shifts query result
+interface WeeklyShiftResult {
+  date: Date;
+  shifts: bigint;
+  revenue: number | null;
+}
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -9,6 +16,7 @@ const prisma = new PrismaClient();
 // Get analytics data
 router.get('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const timeRange = req.query.timeRange as string || '30D';
     const now = new Date();
     let startDate = new Date();
@@ -120,7 +128,7 @@ router.get('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next)
     });
 
     // Get weekly shifts and revenue
-    const weeklyShifts = await prisma.$queryRaw`
+    const weeklyShifts = await prisma.$queryRaw<WeeklyShiftResult[]>`
       SELECT 
         DATE_TRUNC('day', "startTime") as date,
         COUNT(*)::integer as shifts,
@@ -133,10 +141,10 @@ router.get('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next)
     `;
 
     // Convert BigInt values to numbers in the response
-    const formattedWeeklyShifts = weeklyShifts.map((entry: any) => ({
+    const formattedWeeklyShifts = weeklyShifts.map((entry) => ({
       date: entry.date,
       shifts: Number(entry.shifts),
-      revenue: Number(entry.revenue),
+      revenue: Number(entry.revenue || 0),
     }));
 
     const formattedJobStatusDistribution = jobStatusDistribution.map((item) => ({
@@ -185,13 +193,14 @@ router.get('/', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next)
 // Get dashboard statistics
 router.get('/dashboard', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const today = new Date();
     const startOfToday = startOfDay(today);
     const endOfToday = endOfDay(today);
     const weekStart = startOfWeek(today);
     const weekEnd = endOfWeek(today);
 
-    if (req.user.role === 'EMPLOYER') {
+    if (user.role === 'EMPLOYER') {
       // Get employer dashboard stats
       const [
         activeEmployees,
@@ -313,7 +322,7 @@ router.get('/dashboard', protect, async (req, res, next) => {
         // Count today's shifts
         prisma.shift.count({
           where: {
-            employeeId: req.user.id,
+            employeeId: user.id,
             startTime: {
               gte: startOfToday,
               lte: endOfToday,
@@ -327,7 +336,7 @@ router.get('/dashboard', protect, async (req, res, next) => {
             status: 'ASSIGNED',
             employees: {
               some: {
-                id: req.user.id,
+                id: user.id,
               },
             },
           },
@@ -336,7 +345,7 @@ router.get('/dashboard', protect, async (req, res, next) => {
         // Calculate hours this week
         prisma.shift.findMany({
           where: {
-            employeeId: req.user.id,
+            employeeId: user.id,
             startTime: {
               gte: weekStart,
               lte: weekEnd,
@@ -353,7 +362,7 @@ router.get('/dashboard', protect, async (req, res, next) => {
         // Get upcoming shifts
         prisma.shift.findMany({
           where: {
-            employeeId: req.user.id,
+            employeeId: user.id,
             startTime: {
               gte: today,
             },

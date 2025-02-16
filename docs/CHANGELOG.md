@@ -2,6 +2,20 @@
 
 All notable changes to the Moving Company Management System will be documented in this file.
 
+## 17.02.2025
+
+### Security & Type Safety
+- Improved type safety in authentication middleware with `ensureAuth` utility
+- Fixed TypeScript errors in request user handling
+- Added proper typing for raw SQL queries in analytics
+- Enhanced shift creation with required job ID validation
+
+### Code Quality
+- Refactored route handlers to use type-safe authentication checks
+- Improved error handling in user authentication
+- Added validation for shift-job relationships
+- Enhanced code documentation and type definitions
+
 
 ## 16.02.2025
 

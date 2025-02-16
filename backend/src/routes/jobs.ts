@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { PrismaClient, Prisma, JobStatus } from '@prisma/client';
-import { protect, restrictTo } from '../middleware/auth';
+import { protect, restrictTo, ensureAuth } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { Request, Response } from 'express';
 
@@ -36,6 +36,7 @@ const assignJobSchema = z.object({
 // Get all jobs
 router.get('/', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { status } = req.query;
     const where: Prisma.JobWhereInput = {};
 
@@ -45,13 +46,13 @@ router.get('/', protect, async (req, res, next) => {
     }
 
     // For employees, only show available jobs or jobs they're assigned to
-    if (req.user?.role === 'EMPLOYEE') {
+    if (user.role === 'EMPLOYEE') {
       where.OR = [
         { status: 'AVAILABLE' },
         {
           employees: {
             some: {
-              id: req.user.id
+              id: user.id
             }
           }
         }
@@ -88,14 +89,15 @@ router.get('/', protect, async (req, res, next) => {
 // Get job history
 router.get('/history', protect, async (req, res, next) => {
   try {
-    const whereClause = {
+    const user = ensureAuth(req);
+    const whereClause: Prisma.JobWhereInput = {
       status: {
-        in: ['COMPLETED', 'CANCELLED']
+        in: ['COMPLETED', 'CANCELLED'] as JobStatus[]
       },
-      ...(req.user?.role === 'EMPLOYEE' 
-        ? { employees: { some: { id: req.user.id } } }
-        : req.user?.role === 'EMPLOYER'
-          ? { employees: { some: { id: req.user.id } } }
+      ...(user.role === 'EMPLOYEE' 
+        ? { employees: { some: { id: user.id } } }
+        : user.role === 'EMPLOYER'
+          ? { employees: { some: { id: user.id } } }
           : {}),
     };
 
@@ -131,8 +133,8 @@ router.get('/history', protect, async (req, res, next) => {
     // For employees, filter shifts to only include their own
     const jobsWithFilteredData = jobs.map(job => ({
       ...job,
-      shifts: req.user?.role === 'EMPLOYEE' 
-        ? job.shifts.filter(shift => shift.employeeId === req.user?.id)
+      shifts: user.role === 'EMPLOYEE' 
+        ? job.shifts.filter(shift => shift.employeeId === user.id)
         : job.shifts
     }));
 
@@ -308,6 +310,7 @@ router.post('/:id/assign', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req,
 // Update job status
 router.post('/:id/status', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
     const { status, removeShifts = false } = req.body;
 
@@ -317,7 +320,7 @@ router.post('/:id/status', protect, async (req, res, next) => {
     }
 
     // Only employers can set job to AVAILABLE or ASSIGNED
-    if (['AVAILABLE', 'ASSIGNED'].includes(status) && req.user?.role !== 'EMPLOYER') {
+    if (['AVAILABLE', 'ASSIGNED'].includes(status) && user.role !== 'EMPLOYER') {
       throw new AppError('You do not have permission to perform this action', 403);
     }
 
@@ -373,6 +376,7 @@ router.post('/:id/status', protect, async (req, res, next) => {
 // Apply for job (employee only)
 router.post('/:id/apply', protect, async (req, res, next) => {
   try {
+    const user = ensureAuth(req);
     const { id } = req.params;
 
     // Check if job exists and is available
@@ -398,16 +402,16 @@ router.post('/:id/apply', protect, async (req, res, next) => {
     }
 
     // Check if employee is already assigned
-    if (job.employees.some(employee => employee.id === req.user?.id)) {
+    if (job.employees.some(employee => employee.id === user.id)) {
       throw new AppError('You are already assigned to this job', 400);
     }
 
     // Check if employee is verified
     const employee = await prisma.user.findUnique({
-      where: { id: req.user?.id },
+      where: { id: user.id },
     });
 
-    if (req.user?.role === 'EMPLOYEE' && !employee?.verified) {
+    if (user.role === 'EMPLOYEE' && !employee?.verified) {
       throw new AppError('Your account must be verified to apply for jobs', 403);
     }
 
@@ -416,7 +420,7 @@ router.post('/:id/apply', protect, async (req, res, next) => {
       where: { id },
       data: {
         employees: {
-          connect: { id: req.user?.id },
+          connect: { id: user.id },
         },
         status: 'ASSIGNED',
       },
@@ -432,7 +436,7 @@ router.post('/:id/apply', protect, async (req, res, next) => {
     });
 
     // Create a shift for the assigned job
-    if (req.user?.id) {
+    if (user.id) {
       const jobDetails = await prisma.job.findUnique({
         where: { id },
         select: {
@@ -446,7 +450,7 @@ router.post('/:id/apply', protect, async (req, res, next) => {
           data: {
             employee: {
               connect: {
-                id: req.user.id
+                id: user.id
               }
             },
             job: {

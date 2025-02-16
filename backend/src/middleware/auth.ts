@@ -17,6 +17,14 @@ declare global {
   }
 }
 
+// Utility function to ensure request has authenticated user
+export const ensureAuth = (req: Request): NonNullable<Request['user']> => {
+  if (!req.user) {
+    throw new AppError('You are not logged in', 401);
+  }
+  return req.user;
+};
+
 export const protect = async (
   req: Request,
   res: Response,
