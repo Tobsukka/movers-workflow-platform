@@ -2,7 +2,16 @@
 
 All notable changes to the Moving Company Management System will be documented in this file.
 
-## 18.02.2025
+## 17.02.2025
+
+### Security Enhancements
+- Fixed token invalidation in frontend authentication
+- Improved axios interceptors to handle token removal in real-time
+- Enhanced authentication state management to prevent unauthorized API calls
+- Removed token dependency from axios interceptors for better security
+- Added immediate logout on token deletion or invalidation
+
+## 17.02.2025
 
 ### Security Enhancements
 - Enhanced Helmet configuration with comprehensive security headers

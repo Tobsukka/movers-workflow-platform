@@ -32,10 +32,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Set up axios interceptor for authentication
   useEffect(() => {
-    const interceptor = axios.interceptors.request.use(
+    // Function to get the current token from localStorage
+    const getToken = () => localStorage.getItem('token');
+
+    const requestInterceptor = axios.interceptors.request.use(
       (config) => {
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
+        const currentToken = getToken();
+        if (currentToken) {
+          config.headers.Authorization = `Bearer ${currentToken}`;
         }
         return config;
       },
@@ -44,10 +48,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     );
 
+    // Add response interceptor to handle 401 errors
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          // Token is invalid or expired, logout the user
+          logout();
+        }
+        return Promise.reject(error);
+      }
+    );
+
     return () => {
-      axios.interceptors.request.eject(interceptor);
+      axios.interceptors.request.eject(requestInterceptor);
+      axios.interceptors.response.eject(responseInterceptor);
     };
-  }, [token]);
+  }, []); // Remove token dependency since we're now getting it directly from localStorage
 
   useEffect(() => {
     const initializeAuth = async () => {
@@ -76,11 +93,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string, userType: 'employee' | 'employer') => {
     try {
+      console.log('Attempting login with:', { email, userType });
       const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
         email,
         password,
       });
 
+      console.log('Login response:', response.data);
       const { token: newToken, user: userData } = response.data.data;
 
       // Verify user type matches
@@ -88,6 +107,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         (userType === 'employee' && userData.role !== 'EMPLOYEE') ||
         (userType === 'employer' && !['EMPLOYER', 'ADMIN'].includes(userData.role))
       ) {
+        console.error('User type mismatch:', { expected: userType, received: userData.role });
         throw new Error('Invalid user type');
       }
 
@@ -102,6 +122,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         navigate('/employer');
       }
     } catch (error) {
+      console.error('Login error:', error);
+      if (axios.isAxiosError(error)) {
+        throw new Error(error.response?.data?.message || 'An error occurred during login');
+      }
       throw error;
     }
   };
