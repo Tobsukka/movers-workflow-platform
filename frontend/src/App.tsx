@@ -1,7 +1,9 @@
+import React, { Suspense } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import { AuthProvider } from './contexts/AuthContext';
+import { CSRFProvider } from './contexts/CSRFContext';
 import PublicLayout from './layouts/PublicLayout';
 import EmployerLayout from './layouts/EmployerLayout';
 import EmployeeLayout from './layouts/EmployeeLayout';
@@ -38,55 +40,66 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <Router>
-        <AuthProvider>
-          <Routes>
-            {/* Public Routes */}
-            <Route element={<PublicLayout />}>
-              <Route path="/login/employee" element={<Login userType="employee" />} />
-              <Route path="/login/employer" element={<Login userType="employer" />} />
-              <Route path="/register/employee" element={<EmployeeRegister />} />
-              <Route path="/register/employer" element={<EmployerRegister />} />
-            </Route>
+        <CSRFProvider>
+          <AuthProvider>
+            <Suspense fallback={
+              <div className="flex items-center justify-center min-h-screen">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
+                  <div className="mt-4 text-gray-600">Loading...</div>
+                </div>
+              </div>
+            }>
+              <Routes>
+                {/* Public Routes */}
+                <Route element={<PublicLayout />}>
+                  <Route path="/login/employee" element={<Login userType="employee" />} />
+                  <Route path="/login/employer" element={<Login userType="employer" />} />
+                  <Route path="/register/employee" element={<EmployeeRegister />} />
+                  <Route path="/register/employer" element={<EmployerRegister />} />
+                </Route>
 
-            {/* Employer Routes */}
-            <Route
-              element={
-                <ProtectedRoute allowedRoles={['EMPLOYER', 'ADMIN']}>
-                  <EmployerLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route path="/employer" element={<EmployerDashboard />} />
-              <Route path="/employer/employees" element={<Employees />} />
-              <Route path="/employer/jobs" element={<Jobs />} />
-              <Route path="/employer/history" element={<EmployerJobHistory />} />
-              <Route path="/employer/shifts" element={<Shifts />} />
-              <Route path="/employer/my-shifts" element={<MyShifts />} />
-              <Route path="/employer/analytics" element={<Analytics />} />
-            </Route>
+                {/* Employer Routes */}
+                <Route
+                  element={
+                    <ProtectedRoute allowedRoles={['EMPLOYER', 'ADMIN']}>
+                      <EmployerLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route path="/employer" element={<EmployerDashboard />} />
+                  <Route path="/employer/employees" element={<Employees />} />
+                  <Route path="/employer/jobs" element={<Jobs />} />
+                  <Route path="/employer/history" element={<EmployerJobHistory />} />
+                  <Route path="/employer/shifts" element={<Shifts />} />
+                  <Route path="/employer/my-shifts" element={<MyShifts />} />
+                  <Route path="/employer/analytics" element={<Analytics />} />
+                </Route>
 
-            {/* Employee Routes */}
-            <Route
-              element={
-                <ProtectedRoute allowedRoles={['EMPLOYEE']}>
-                  <EmployeeLayout />
-                </ProtectedRoute>
-              }
-            >
-              <Route path="/employee" element={<EmployeeDashboard />} />
-              <Route path="/employee/jobs" element={<EmployeeJobs />} />
-              <Route path="/employee/history" element={<JobHistory />} />
-              <Route path="/employee/shifts" element={<EmployeeShifts />} />
-              <Route path="/employee/profile" element={<Profile />} />
-            </Route>
+                {/* Employee Routes */}
+                <Route
+                  element={
+                    <ProtectedRoute allowedRoles={['EMPLOYEE']}>
+                      <EmployeeLayout />
+                    </ProtectedRoute>
+                  }
+                >
+                  <Route path="/employee" element={<EmployeeDashboard />} />
+                  <Route path="/employee/jobs" element={<EmployeeJobs />} />
+                  <Route path="/employee/history" element={<JobHistory />} />
+                  <Route path="/employee/shifts" element={<EmployeeShifts />} />
+                  <Route path="/employee/profile" element={<Profile />} />
+                </Route>
 
-            {/* Redirect root to appropriate dashboard */}
-            <Route path="/" element={<Navigate to="/login/employee" />} />
+                {/* Redirect root to appropriate dashboard */}
+                <Route path="/" element={<Navigate to="/login/employee" />} />
 
-            {/* 404 */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </AuthProvider>
+                {/* 404 */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
+          </AuthProvider>
+        </CSRFProvider>
       </Router>
       <ReactQueryDevtools />
     </QueryClientProvider>

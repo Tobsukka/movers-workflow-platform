@@ -15,6 +15,7 @@
    - [Authentication](#authentication-security)
    - [Authorization](#authorization)
    - [Data Protection](#data-protection)
+   - [CSRF Protection](#csrf-protection)
 4. [Testing](#testing)
    - [Unit Tests](#unit-tests)
    - [Integration Tests](#integration-tests)
@@ -421,6 +422,133 @@ enum ShiftStatus {
 
 ## Security Features
 
+### CSRF Protection
+
+The system implements a robust double-submit cookie pattern for CSRF protection with enhanced security measures.
+
+#### Token Generation
+```typescript
+// Token characteristics
+- 32 bytes of cryptographically secure random data
+- Base64URL encoded for safe transmission
+- Session-bound (tied to user's session ID)
+- 1-hour expiry in production (2 hours in development)
+
+// Generation process
+const tokenBuffer = crypto.randomBytes(32);
+const token = tokenBuffer.toString('base64url');
+const hashedToken = crypto.createHash('sha256')
+  .update(token + sessionId)
+  .digest('hex');
+```
+
+#### Cookie Configuration
+```typescript
+{
+  key: 'XSRF-TOKEN',
+  httpOnly: false,        // Must be false to allow frontend access
+  secure: true,           // HTTPS only in production
+  sameSite: 'strict',     // Prevents cross-site cookie transmission
+  maxAge: 3600,           // 1 hour in production
+  path: '/',
+  domain: 'your-domain.com'
+}
+```
+
+#### Token Validation
+```typescript
+// Format validation
+if (!/^[A-Za-z0-9_-]+$/.test(headerToken)) {
+  return '';  // Invalid format
+}
+
+// Age validation
+if (tokenCreatedAt && Date.now() - tokenCreatedAt > 7200000) {
+  return '';  // Token expired
+}
+
+// Origin validation (production)
+if (origin && !origin.includes(process.env.COOKIE_DOMAIN)) {
+  return res.status(403);  // Invalid origin
+}
+```
+
+#### Rate Limiting
+```typescript
+{
+  windowMs: 15 * 60 * 1000,  // 15 minutes
+  max: process.env.NODE_ENV === 'production' ? 50 : 100,
+  keyGenerator: (req) => req.ip + (req.session?.id || '')
+}
+```
+
+#### Protected Routes
+```typescript
+// Excluded from CSRF checks
+[
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/refresh-token',
+  '/api/csrf-token'
+]
+
+// All other routes require valid CSRF token
+app.use(csrfProtection);
+```
+
+#### Frontend Implementation
+```typescript
+// Automatic token refresh
+const refreshCSRFToken = async () => {
+  const response = await axios.get('/api/csrf-token');
+  // Token is automatically set in cookie
+  return response.headers['x-csrf-token'];
+};
+
+// Axios interceptor
+axios.interceptors.request.use(async (config) => {
+  const token = getCookie('XSRF-TOKEN');
+  if (token) {
+    config.headers['X-CSRF-Token'] = token;
+  } else {
+    await refreshCSRFToken();
+  }
+  return config;
+});
+```
+
+#### Error Handling
+```typescript
+{
+  // Error response
+  status: 403,
+  code: 'CSRF_ERROR',
+  message: 'Invalid request',
+  requestId: 'unique-request-id'  // For tracking
+
+  // Logging
+  debug.error('CSRF Attack Detected', {
+    path, method, ip, userAgent,
+    timestamp, sessionPresent,
+    environment, requestId
+  });
+}
+```
+
+#### Security Headers
+```typescript
+{
+  'X-CSRF-Token': hashedToken,
+  'Content-Security-Policy': strict policy,
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+  'X-Frame-Options': 'DENY',
+  'X-Content-Type-Options': 'nosniff',
+  'X-XSS-Protection': '1; mode=block',
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
+  'Referrer-Policy': 'strict-origin-when-cross-origin'
+}
+```
+
 ### Authentication Security
 - JWT-based authentication with access and refresh tokens
 - Password hashing using bcrypt with salt rounds of 12
@@ -468,11 +596,29 @@ npm install
 
 Backend (.env):
 ```env
+# Database
 DATABASE_URL="postgresql://postgres:postgres@localhost:5433/moving_company"
+
+# Server
+PORT=5000
+NODE_ENV="development"
+
 PORT=5000
 JWT_SECRET="your-super-secret-jwt-key"
 JWT_REFRESH_SECRET="your-super-secret-refresh-key"
 NODE_ENV="development"
+FRONTEND_URL="http://localhost:5173"
+
+# Cookie Settings
+COOKIE_DOMAIN=localhost
+COOKIE_SECURE=false
+CSRF_COOKIE_NAME=XSRF-TOKEN
+SESSION_SECRET=your-session-secret-key
+
+
+# Production Only
+COOKIE_SECURE=true                      # Force HTTPS in production
+
 ```
 
 Frontend (.env):

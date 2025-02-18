@@ -3,18 +3,37 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
+import session from 'express-session';
 import { errorHandler } from './middleware/errorHandler';
+import { csrfProtection, handleCSRFError, setCSRFToken } from './middleware/csrf';
 import authRoutes from './routes/auth';
 import userRoutes from './routes/users';
 import jobRoutes from './routes/jobs';
 import shiftRoutes from './routes/shifts';
 import analyticsRoutes from './routes/analytics';
+import { Request, Response, NextFunction } from 'express';
 
 dotenv.config();
 
 const app = express();
 
 // Middleware
+app.use(cookieParser()); // Add cookie-parser before other middleware
+
+// Session configuration - Add before CSRF middleware
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    sameSite: 'strict',
+    maxAge: 7200000 // 2 hours to match CSRF token
+  }
+}));
+
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -77,7 +96,8 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'XSRF-TOKEN', 'X-CSRF-Token'],
+  exposedHeaders: ['XSRF-TOKEN', 'X-CSRF-Token']
 }));
 
 app.use(express.json());
@@ -155,6 +175,30 @@ app.use([
 
 // Apply general API rate limit to all other routes
 app.use('/api', rateLimiters.api);
+
+// CSRF Protection
+// Exclude paths that don't need CSRF protection
+const csrfExcludedPaths = [
+  '/api/auth/login',
+  '/api/auth/register',
+  '/api/auth/refresh-token'
+];
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  if (csrfExcludedPaths.includes(req.path)) {
+    next();
+  } else {
+    csrfProtection(req, res, next);
+  }
+});
+
+// Handle CSRF errors
+app.use(handleCSRFError);
+
+// CSRF token endpoint
+app.get('/api/csrf-token', csrfProtection, setCSRFToken, (req: Request, res: Response) => {
+  res.json({ status: 'success' });
+});
 
 // Routes
 app.use('/api/auth', authRoutes);
