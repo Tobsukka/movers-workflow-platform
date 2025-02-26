@@ -422,145 +422,257 @@ enum ShiftStatus {
 
 ## Security Features
 
-### CSRF Protection
+Our application implements a multi-layered security approach with several key components:
 
-The system implements a robust double-submit cookie pattern for CSRF protection with enhanced security measures.
+### Authentication Security
 
-#### Token Generation
+#### HttpOnly Cookie Authentication
 ```typescript
-// Token characteristics
-- 32 bytes of cryptographically secure random data
-- Base64URL encoded for safe transmission
-- Session-bound (tied to user's session ID)
-- 1-hour expiry in production (2 hours in development)
+// Set secure HttpOnly cookies for authentication tokens
+res.cookie('access_token', token, {
+  httpOnly: true,                // Inaccessible to JavaScript
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+  maxAge: 24 * 60 * 60 * 1000,   // 1 day
+  path: '/'
+});
 
-// Generation process
-const tokenBuffer = crypto.randomBytes(32);
-const token = tokenBuffer.toString('base64url');
-const hashedToken = crypto.createHash('sha256')
-  .update(token + sessionId)
-  .digest('hex');
-```
-
-#### Cookie Configuration
-```typescript
-{
-  key: 'XSRF-TOKEN',
-  httpOnly: false,        // Must be false to allow frontend access
-  secure: true,           // HTTPS only in production
-  sameSite: 'strict',     // Prevents cross-site cookie transmission
-  maxAge: 3600,           // 1 hour in production
-  path: '/',
-  domain: 'your-domain.com'
-}
+// Separate refresh token cookie
+res.cookie('refresh_token', refreshToken, {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  path: '/'
+});
 ```
 
 #### Token Validation
 ```typescript
-// Format validation
-if (!/^[A-Za-z0-9_-]+$/.test(headerToken)) {
-  return '';  // Invalid format
+// Get token from cookie or authorization header (for backwards compatibility)
+let token = req.cookies.access_token;
+    
+// Fallback to Authorization header
+if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+  token = req.headers.authorization.split(' ')[1];
 }
 
-// Age validation
-if (tokenCreatedAt && Date.now() - tokenCreatedAt > 7200000) {
-  return '';  // Token expired
-}
-
-// Origin validation (production)
-if (origin && !origin.includes(process.env.COOKIE_DOMAIN)) {
-  return res.status(403);  // Invalid origin
-}
-```
-
-#### Rate Limiting
-```typescript
-{
-  windowMs: 15 * 60 * 1000,  // 15 minutes
-  max: process.env.NODE_ENV === 'production' ? 50 : 100,
-  keyGenerator: (req) => req.ip + (req.session?.id || '')
+// JWT verification with proper error handling
+try {
+  decoded = jwt.verify(token, process.env.JWT_SECRET);
+} catch (err) {
+  // Clear invalid cookies
+  res.clearCookie('access_token');
+  res.clearCookie('refresh_token');
+  throw new AppError('Invalid token. Please log in again.', 401);
 }
 ```
 
-#### Protected Routes
+#### Secure Logout
 ```typescript
-// Excluded from CSRF checks
-[
-  '/api/auth/login',
-  '/api/auth/register',
-  '/api/auth/refresh-token',
-  '/api/csrf-token'
-]
+// Logout route to invalidate all tokens
+router.post('/logout', (req, res) => {
+  res.clearCookie('access_token');
+  res.clearCookie('refresh_token');
+  
+  res.status(200).json({
+    status: 'success',
+    message: 'Logged out successfully'
+  });
+});
+```
 
-// All other routes require valid CSRF token
-app.use(csrfProtection);
+#### Additional Features
+- JWT-based authentication with access and refresh tokens
+- Password hashing using bcrypt with salt rounds of 12
+- Token expiration and rotation
+- Rate limiting on authentication endpoints (30 attempts per hour)
+- Secure password requirements
+
+### CSRF Protection
+
+The system implements a simplified and robust double-submit cookie pattern for CSRF protection.
+
+#### Token Generation and Verification
+```typescript
+// Generate random token
+const token = crypto.randomBytes(32).toString('hex');
+
+// Set it as a cookie
+res.cookie('XSRF-TOKEN', token, {
+  httpOnly: false,  // Must be false so frontend JS can read it
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+  maxAge: 7200000,  // 2 hours
+  path: '/'
+});
+
+// Store in session for verification
+req.session.csrfToken = token;
+
+// Verification middleware
+app.use((req, res, next) => {
+  // Skip for excluded paths and non-mutating methods
+  if (excludedPaths.includes(req.path) || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
+  
+  // Get tokens from header and cookie
+  const headerToken = req.headers['x-csrf-token'];
+  const cookieToken = req.cookies['XSRF-TOKEN'];
+  
+  // Validate token match
+  if (!headerToken || !cookieToken || headerToken !== cookieToken) {
+    return res.status(403).json({
+      status: 'error',
+      message: 'Invalid CSRF token',
+      code: 'CSRF_ERROR'
+    });
+  }
+  
+  next();
+});
 ```
 
 #### Frontend Implementation
 ```typescript
-// Automatic token refresh
-const refreshCSRFToken = async () => {
-  const response = await axios.get('/api/csrf-token');
-  // Token is automatically set in cookie
-  return response.headers['x-csrf-token'];
-};
-
-// Axios interceptor
+// Axios interceptor to add CSRF token to requests
 axios.interceptors.request.use(async (config) => {
-  const token = getCookie('XSRF-TOKEN');
-  if (token) {
-    config.headers['X-CSRF-Token'] = token;
-  } else {
-    await refreshCSRFToken();
+  const csrfToken = document.cookie
+    .split('; ')
+    .find(row => row.startsWith('XSRF-TOKEN='))
+    ?.split('=')[1];
+
+  if (csrfToken) {
+    // Decode and set the token in the header
+    const decodedToken = decodeURIComponent(csrfToken);
+    config.headers['X-CSRF-Token'] = decodedToken;
   }
   return config;
 });
 ```
 
-#### Error Handling
-```typescript
-{
-  // Error response
-  status: 403,
-  code: 'CSRF_ERROR',
-  message: 'Invalid request',
-  requestId: 'unique-request-id'  // For tracking
+### Request Signing for Critical Operations
 
-  // Logging
-  debug.error('CSRF Attack Detected', {
-    path, method, ip, userAgent,
-    timestamp, sessionPresent,
-    environment, requestId
-  });
+#### Server-Side Implementation
+```typescript
+// Generate a signature for request data
+export const generateSignature = (payload: string, secret: string): string => {
+  return crypto.createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex');
+};
+
+// Middleware to verify request signatures
+export const verifyRequestSignature = (req, res, next) => {
+  // Get signature and timestamp from headers
+  const signature = req.headers['x-signature'];
+  const timestamp = req.headers['x-timestamp'];
+  
+  // Verify timestamp freshness (prevent replay attacks)
+  const requestTime = parseInt(timestamp, 10);
+  const currentTime = Date.now();
+  
+  if (isNaN(requestTime) || Math.abs(currentTime - requestTime) > MAX_TIMESTAMP_DIFF) {
+    return next(new AppError('Request signature verification failed: Timestamp expired', 403));
+  }
+  
+  // Create the payload string
+  let payload = `${req.method}:${req.originalUrl}:${timestamp}`;
+  if (req.method !== 'GET' && req.body) {
+    payload += `:${JSON.stringify(req.body)}`;
+  }
+  
+  // Verify signature
+  const expectedSignature = generateSignature(payload, secret);
+  if (signature !== expectedSignature) {
+    return next(new AppError('Request signature verification failed: Invalid signature', 403));
+  }
+  
+  next();
+};
+```
+
+#### Client-Side Implementation
+```typescript
+// Generate signing headers
+export const signRequest = (method, path, body) => {
+  const timestamp = Date.now().toString();
+  let payload = `${method}:${path}:${timestamp}`;
+  
+  if (method !== 'GET' && body) {
+    payload += `:${JSON.stringify(body)}`;
+  }
+  
+  const signature = generateSignature(payload, secret);
+  
+  return {
+    'X-Timestamp': timestamp,
+    'X-Signature': signature
+  };
+};
+
+// Enhanced API client with automatic signing
+const api = {
+  post: async (url, data, config) => {
+    // Apply request signing for sensitive operations
+    if (needsSigning(url, 'POST')) {
+      config = addSigningHeaders({
+        ...config,
+        method: 'POST',
+        url,
+        data
+      });
+    }
+    
+    return axios.post(url, data, config);
+  }
+  // ... similar for other methods
+};
+```
+
+### Advanced Security Headers
+
+#### Content Security Policy
+```typescript
+contentSecurityPolicy: {
+  directives: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'", "'unsafe-inline'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:", "blob:"],
+    connectSrc: ["'self'"],
+    fontSrc: ["'self'", "data:"],
+    objectSrc: ["'none'"],
+    mediaSrc: ["'self'"],
+    frameSrc: ["'none'"],
+    workerSrc: ["'self'"],      // Restrict worker scripts
+    manifestSrc: ["'self'"],    // Restrict manifest files
+    formAction: ["'self'"],     // Restrict form targets
+    baseUri: ["'self'"],        // Restrict base URIs
+  }
 }
 ```
 
-#### Security Headers
+#### Permissions Policy
 ```typescript
-{
-  'X-CSRF-Token': hashedToken,
-  'Content-Security-Policy': strict policy,
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
-  'X-Frame-Options': 'DENY',
-  'X-Content-Type-Options': 'nosniff',
-  'X-XSS-Protection': '1; mode=block',
-  'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
-  'Referrer-Policy': 'strict-origin-when-cross-origin'
-}
+// Comprehensive permissions policy
+app.use((req, res, next) => {
+  res.setHeader('Permissions-Policy', 
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), ' +
+    'magnetometer=(), microphone=(), payment=(), usb=(), ' +
+    'interest-cohort=(), autoplay=(), encrypted-media=self, ' +
+    'picture-in-picture=(), fullscreen=(self)'
+  );
+  next();
+});
 ```
-
-### Authentication Security
-- JWT-based authentication with access and refresh tokens
-- Password hashing using bcrypt with salt rounds of 12
-- Token expiration and rotation
-- Rate limiting on authentication endpoints
-- Secure password requirements
 
 ### Authorization
 - Role-based access control (RBAC)
 - Route protection middleware
 - Resource ownership validation
-- Employee verification workflow
+- Employee verification workflow with cryptographic signing
 
 ### Data Protection
 - CORS protection with whitelisted origins
@@ -568,7 +680,10 @@ axios.interceptors.request.use(async (config) => {
 - Input validation using Zod
 - SQL injection protection via Prisma
 - XSS protection
-- Rate limiting on API endpoints
+- Rate limiting on API endpoints:
+  - General API: 60 req/minute with IP-based tracking
+  - Authentication: 30 req/hour with combined IP + email tracking
+  - Sensitive operations: 50 req/hour with user-based tracking
 
 ## Development
 

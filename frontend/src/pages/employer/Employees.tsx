@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
 import { Check, MoreHorizontal, Search } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import api from '../../utils/api';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,8 +39,10 @@ export default function Employees() {
   const { data: employees, isLoading } = useQuery({
     queryKey: ['employees'],
     queryFn: async () => {
-      const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/users`);
-      return response.data.data.users.filter(
+      const response = await api.get<{data: {users: Employee[]}}>(
+        '/api/users'
+      );
+      return response.data.users.filter(
         (user: Employee) => user.role === 'EMPLOYEE'
       );
     },
@@ -48,10 +50,12 @@ export default function Employees() {
 
   const verifyMutation = useMutation({
     mutationFn: async (employeeId: string) => {
-      const response = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/users/${employeeId}/verify`
+      // This will automatically use request signing since it's a sensitive operation
+      // Always send an empty object as the body to ensure consistent signature generation
+      return await api.post(
+        `/api/users/${employeeId}/verify`, 
+        {} // Explicitly send empty object for consistent signature generation
       );
-      return response.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });

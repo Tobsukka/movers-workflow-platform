@@ -31,12 +31,11 @@ export const protect = async (
   next: NextFunction
 ) => {
   try {
-    // 1) Get token from header
-    let token;
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith('Bearer')
-    ) {
+    // 1) Get token from cookie or authorization header (for backwards compatibility)
+    let token = req.cookies.access_token;
+    
+    // If no cookie token, try to get from Authorization header
+    if (!token && req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
       token = req.headers.authorization.split(' ')[1];
     }
 
@@ -55,6 +54,9 @@ export const protect = async (
         role: string;
       };
     } catch (err) {
+      // Clear invalid cookies
+      res.clearCookie('access_token');
+      res.clearCookie('refresh_token');
       throw new AppError('Invalid token. Please log in again.', 401);
     }
 

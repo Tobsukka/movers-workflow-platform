@@ -26,5 +26,8 @@
     "concurrently": "^8.2.2",
     "cypress": "^14.0.3",
     "supertest": "^7.0.0"
+  },
+  "dependencies": {
+    "crypto-js": "^4.2.0"
   }
 }

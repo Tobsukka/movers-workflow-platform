@@ -180,43 +180,52 @@ export function CSRFProvider({ children }: { children: ReactNode }) {
       environment: import.meta.env.MODE
     });
 
-    const setupCSRF = async () => {
-      try {
-        const existingToken = document.cookie
-          .split('; ')
-          .find(row => row.startsWith('XSRF-TOKEN='))
-          ?.split('=')[1];
+    // Delay CSRF setup to avoid race conditions with auth
+    const initDelayMs = 100;
 
-        if (!existingToken && mounted) {
-          debug.info('Initial Setup', {
-            status: 'No token found, requesting new token',
-            retryCount
-          });
-          await refreshCSRFToken();
-        } else {
-          debug.success('Initial Setup', {
-            status: 'Existing token found',
-            tokenLength: existingToken?.length
-          });
+    setTimeout(async () => {
+      if (!mounted) return;
+      
+      const setupCSRF = async () => {
+        try {
+          const existingToken = document.cookie
+            .split('; ')
+            .find(row => row.startsWith('XSRF-TOKEN='))
+            ?.split('=')[1];
+  
+          if (!existingToken && mounted) {
+            debug.info('Initial Setup', {
+              status: 'No token found, requesting new token',
+              retryCount
+            });
+            await refreshCSRFToken();
+          } else {
+            debug.success('Initial Setup', {
+              status: 'Existing token found',
+              tokenLength: existingToken?.length
+            });
+          }
+        } catch (error) {
+          if (mounted && retryCount < MAX_RETRIES) {
+            retryCount++;
+            debug.warning('Setup Retry', {
+              attempt: retryCount,
+              maxRetries: MAX_RETRIES,
+              nextRetryDelay: RETRY_DELAY * retryCount,
+              error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            setTimeout(setupCSRF, RETRY_DELAY * retryCount);
+          } else {
+            debug.error('Setup Failed', {
+              finalRetryCount: retryCount,
+              error: error instanceof Error ? error.message : 'Unknown error'
+            });
+          }
         }
-      } catch (error) {
-        if (mounted && retryCount < MAX_RETRIES) {
-          retryCount++;
-          debug.warning('Setup Retry', {
-            attempt: retryCount,
-            maxRetries: MAX_RETRIES,
-            nextRetryDelay: RETRY_DELAY * retryCount,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          });
-          setTimeout(setupCSRF, RETRY_DELAY * retryCount);
-        } else {
-          debug.error('Setup Failed', {
-            finalRetryCount: retryCount,
-            error: error instanceof Error ? error.message : 'Unknown error'
-          });
-        }
-      }
-    };
+      };
+  
+      await setupCSRF();
+    }, initDelayMs);
 
     const requestInterceptor = axios.interceptors.request.use(
       async (config) => {
@@ -239,15 +248,20 @@ export function CSRFProvider({ children }: { children: ReactNode }) {
               ?.split('=')[1];
 
             if (csrfToken) {
-              config.headers['XSRF-TOKEN'] = decodeURIComponent(csrfToken);
-              config.headers['X-CSRF-Token'] = csrfToken;
+              // Decode the token from the cookie and set it in the header
+              const decodedToken = decodeURIComponent(csrfToken);
+              config.headers['X-CSRF-Token'] = decodedToken;
+              
+              // Log the token we're sending (truncated for security)
               debug.success('Token Applied', {
                 url: config.url,
-                tokenPresent: true
+                tokenPresent: true,
+                tokenLength: decodedToken.length,
+                tokenPreview: decodedToken.substring(0, 4) + '...'
               });
             } else {
-              // Skip token refresh for the token endpoint itself
-              if (config.url?.includes('/api/csrf-token')) {
+              // Skip token refresh for the token endpoint and non-mutating requests
+              if (config.url?.includes('/api/csrf-token') || ['GET', 'HEAD', 'OPTIONS'].includes(config.method?.toUpperCase() || '')) {
                 return config;
               }
               
@@ -266,11 +280,16 @@ export function CSRFProvider({ children }: { children: ReactNode }) {
                 ?.split('=')[1];
               
               if (newToken) {
-                config.headers['XSRF-TOKEN'] = decodeURIComponent(newToken);
-                config.headers['X-CSRF-Token'] = newToken;
+                // Decode the new token from the cookie and set it in the header
+                const decodedToken = decodeURIComponent(newToken);
+                config.headers['X-CSRF-Token'] = decodedToken;
+                
+                // Log the token we're sending (truncated for security)
                 debug.success('New Token Applied', {
                   url: config.url,
-                  tokenPresent: true
+                  tokenPresent: true,
+                  tokenLength: decodedToken.length,
+                  tokenPreview: decodedToken.substring(0, 4) + '...'
                 });
               } else {
                 debug.error('Token Application Failed', {
@@ -306,8 +325,6 @@ export function CSRFProvider({ children }: { children: ReactNode }) {
         return Promise.reject(error);
       }
     );
-
-    setupCSRF();
 
     return () => {
       debug.info('Cleanup', {

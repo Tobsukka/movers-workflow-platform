@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client';
 import { protect, restrictTo } from '../middleware/auth';
 import { AppError } from '../middleware/errorHandler';
 import { ensureAuth } from '../middleware/auth';
+import { verifyRequestSignature } from '../middleware/requestSigning';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -154,8 +155,8 @@ router.put('/:id', protect, async (req, res, next) => {
   }
 });
 
-// Verify user (employer only)
-router.post('/:id/verify', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req, res, next) => {
+// Verify user (employer only) - Requires request signing for extra security
+router.post('/:id/verify', protect, restrictTo('EMPLOYER', 'ADMIN'), verifyRequestSignature, async (req, res, next) => {
   try {
     const { id } = req.params;
 
@@ -175,8 +176,8 @@ router.post('/:id/verify', protect, restrictTo('EMPLOYER', 'ADMIN'), async (req,
   }
 });
 
-// Delete user (admin only)
-router.delete('/:id', protect, restrictTo('ADMIN'), async (req, res, next) => {
+// Delete user (admin only) - Requires request signing for extra security
+router.delete('/:id', protect, restrictTo('ADMIN'), verifyRequestSignature, async (req, res, next) => {
   try {
     const { id } = req.params;
 

@@ -124,6 +124,25 @@ router.post('/login', async (req, res, next) => {
       { expiresIn: '7d' }
     );
 
+    // Set both tokens in HttpOnly cookies
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 1 day
+      path: '/'
+    });
+
+    res.cookie('refresh_token', refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      path: '/'
+    });
+
+    // For backwards compatibility, also send the token in the response body
+    // This can be removed once the frontend is fully updated
     res.status(200).json({
       status: 'success',
       data: {
@@ -145,16 +164,25 @@ router.post('/login', async (req, res, next) => {
 // Refresh token
 router.post('/refresh-token', async (req, res, next) => {
   try {
-    const { refreshToken } = req.body;
+    // Get the refresh token from cookie or request body (for backward compatibility)
+    const refreshToken = req.cookies.refresh_token || req.body.refreshToken;
 
     if (!refreshToken) {
       throw new AppError('Refresh token is required', 400);
     }
 
-    const decoded = jwt.verify(
-      refreshToken,
-      process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key'
-    ) as { id: string };
+    let decoded;
+    try {
+      decoded = jwt.verify(
+        refreshToken,
+        process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key'
+      ) as { id: string };
+    } catch (err) {
+      // Clear invalid cookies
+      res.clearCookie('access_token');
+      res.clearCookie('refresh_token');
+      throw new AppError('Invalid or expired refresh token', 401);
+    }
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
@@ -170,6 +198,16 @@ router.post('/refresh-token', async (req, res, next) => {
       { expiresIn: '1d' }
     );
 
+    // Set the new access token in cookie
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 1 day
+      path: '/'
+    });
+
+    // For backwards compatibility, also send the token in the response body
     res.status(200).json({
       status: 'success',
       data: {
@@ -179,6 +217,17 @@ router.post('/refresh-token', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Logout route to clear cookies
+router.post('/logout', (req, res) => {
+  res.clearCookie('access_token');
+  res.clearCookie('refresh_token');
+  
+  res.status(200).json({
+    status: 'success',
+    message: 'Logged out successfully'
+  });
 });
 
 export default router; 

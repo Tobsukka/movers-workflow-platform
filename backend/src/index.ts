@@ -4,7 +4,8 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-import session from 'express-session';
+// Import express-session with require to avoid TypeScript errors
+const session = require('express-session');
 import { errorHandler } from './middleware/errorHandler';
 import { csrfProtection, handleCSRFError, setCSRFToken } from './middleware/csrf';
 import authRoutes from './routes/auth';
@@ -13,6 +14,14 @@ import jobRoutes from './routes/jobs';
 import shiftRoutes from './routes/shifts';
 import analyticsRoutes from './routes/analytics';
 import { Request, Response, NextFunction } from 'express';
+
+// Add custom properties to session for TypeScript
+declare module 'express-session' {
+  interface SessionData {
+    csrfToken?: string;
+    csrfTokenCreatedAt?: number;
+  }
+}
 
 dotenv.config();
 
@@ -47,6 +56,10 @@ app.use(
         objectSrc: ["'none'"],                    // Restrict <object>, <embed>, and <applet> elements
         mediaSrc: ["'self'"],                     // Restrict media file sources
         frameSrc: ["'none'"],                     // Restrict iframes
+        workerSrc: ["'self'"],                    // Restrict worker scripts
+        manifestSrc: ["'self'"],                  // Restrict manifest files
+        formAction: ["'self'"],                   // Restrict form targets
+        baseUri: ["'self'"],                      // Restrict base URIs
       },
     },
     crossOriginEmbedderPolicy: true,              // Require CORS for loading cross-origin resources
@@ -69,6 +82,15 @@ app.use(
   })
 );
 
+// Add comprehensive Permissions-Policy header
+app.use((req: Request, res: Response, next: NextFunction) => {
+  // Define a strict permissions policy to limit browser features
+  res.setHeader('Permissions-Policy', 
+    'accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=(), autoplay=(), encrypted-media=self, picture-in-picture=(), fullscreen=(self)'
+  );
+  next();
+});
+
 // Validate required environment variables
 if (!process.env.FRONTEND_URL) {
   console.warn('Warning: FRONTEND_URL not set in environment variables. Using default: http://localhost:5173');
@@ -78,7 +100,7 @@ if (!process.env.FRONTEND_URL) {
 const allowedOrigins = ['http://localhost:5173', 'http://localhost:3000']; // Common development ports
 
 app.use(cors({
-  origin: function(origin, callback) {
+  origin: function(origin: string | undefined, callback: (err: Error | null, allow?: boolean | string) => void) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
@@ -96,7 +118,15 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'XSRF-TOKEN', 'X-CSRF-Token'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'XSRF-TOKEN', 
+    'X-CSRF-Token',
+    // Add request signing headers
+    'X-Signature',
+    'X-Timestamp'
+  ],
   exposedHeaders: ['XSRF-TOKEN', 'X-CSRF-Token']
 }));
 
@@ -184,20 +214,87 @@ const csrfExcludedPaths = [
   '/api/auth/refresh-token'
 ];
 
-app.use((req: Request, res: Response, next: NextFunction) => {
-  if (csrfExcludedPaths.includes(req.path)) {
-    next();
-  } else {
-    csrfProtection(req, res, next);
-  }
-});
-
-// Handle CSRF errors
-app.use(handleCSRFError);
+// Create a simpler CSRF implementation
+app.use(cookieParser(process.env.SESSION_SECRET || 'your-secret-key'));
 
 // CSRF token endpoint
-app.get('/api/csrf-token', csrfProtection, setCSRFToken, (req: Request, res: Response) => {
+app.get('/api/csrf-token', (req: Request, res: Response) => {
+  // Generate a random token
+  const token = require('crypto').randomBytes(32).toString('hex');
+  
+  // Set it as a cookie
+  res.cookie('XSRF-TOKEN', token, {
+    httpOnly: false, // Must be false so frontend JS can read it
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+    maxAge: 7200000, // 2 hours
+    path: '/'
+  });
+  
+  // Also send it in the response header
+  res.setHeader('X-CSRF-Token', token);
+  
+  // Store the token in the session if it exists
+  if (req.session) {
+    req.session.csrfToken = token;
+    req.session.csrfTokenCreatedAt = Date.now();
+  }
+  
   res.json({ status: 'success' });
+});
+
+// Simpler CSRF validation middleware
+app.use((req: Request, res: Response, next: NextFunction) => {
+  // Skip for excluded paths and non-mutating methods
+  if (csrfExcludedPaths.includes(req.path) || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    return next();
+  }
+  
+  // Get token from request headers
+  const headerToken = req.headers['x-csrf-token'] || req.headers['xsrf-token'];
+  
+  // Get token from cookies
+  const cookieToken = req.cookies['XSRF-TOKEN'];
+  
+  // Get token from session
+  const sessionToken = req.session ? req.session.csrfToken : undefined;
+  
+  console.log('CSRF Check:', {
+    headerToken: headerToken ? 'present' : 'missing',
+    cookieToken: cookieToken ? 'present' : 'missing',
+    sessionToken: sessionToken ? 'present' : 'missing',
+    headerMatch: headerToken === cookieToken ? 'match' : 'mismatch',
+    path: req.path,
+    method: req.method
+  });
+  
+  // Safely get substring for logging (handling potential array type)
+  const safeSubstring = (value: string | string[] | undefined): string => {
+    if (!value) return 'missing';
+    if (Array.isArray(value)) {
+      return value.length > 0 ? `${value[0].substring(0, 4)}...` : 'empty-array';
+    }
+    return `${value.substring(0, 4)}...`;
+  };
+  
+  // Validate token
+  if (!headerToken || !cookieToken || headerToken !== cookieToken) {
+    console.error('CSRF Validation Failed', {
+      headerToken: safeSubstring(headerToken as string),
+      cookieToken: safeSubstring(cookieToken),
+      path: req.path,
+      method: req.method,
+      headers: Object.keys(req.headers)
+    });
+    
+    return res.status(403).json({
+      status: 'error',
+      message: 'Invalid CSRF token',
+      code: 'CSRF_ERROR'
+    });
+  }
+  
+  next();
 });
 
 // Routes
@@ -213,7 +310,7 @@ app.use(errorHandler);
 // Export the app for testing
 export { app };
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 3000;
 
 // Only start the server if this file is run directly
 if (require.main === module) {

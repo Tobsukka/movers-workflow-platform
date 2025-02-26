@@ -30,12 +30,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     console.log('Logging out user');
+    try {
+      // Call the logout endpoint to clear HttpOnly cookies
+      await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/logout`, {}, {
+        withCredentials: true
+      });
+    } catch (error) {
+      console.error('Error during logout:', error);
+    }
+    
+    // For backwards compatibility, also clear localStorage
     localStorage.removeItem('token');
+    
+    // Clear the auth state
     setToken(null);
     setUser(null);
+    
+    // Clear any cached queries
     queryClient.clear();
+    
+    // Remove authorization header from axios defaults
+    delete axios.defaults.headers.common['Authorization'];
+    
+    // Navigate to home page
     navigate('/');
   }, [navigate, queryClient]);
 
@@ -46,10 +65,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const requestInterceptor = axios.interceptors.request.use(
       (config) => {
-        const currentToken = getToken();
-        if (currentToken) {
-          config.headers.Authorization = `Bearer ${currentToken}`;
+        // Don't overwrite Authorization if it's already set in defaults
+        if (!config.headers.Authorization) {
+          const currentToken = getToken();
+          if (currentToken) {
+            config.headers.Authorization = `Bearer ${currentToken}`;
+          }
         }
+        
+        // Always set withCredentials for CSRF cookies
         config.withCredentials = true;
         return config;
       },
@@ -63,7 +87,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       (response) => response,
       (error) => {
         console.error('Response interceptor error:', error);
-        if (error.response?.status === 401) {
+        // Only logout on 401 errors that aren't from initial page load requests
+        if (error.response?.status === 401 && error.config?.url !== `${import.meta.env.VITE_API_URL}/api/users/me`) {
+          console.log('Unauthorized request detected - logging out');
           logout();
         }
         return Promise.reject(error);
@@ -88,10 +114,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         if (storedToken) {
           console.log('Fetching user data...');
+          
+          // Set token in axios default headers first to avoid race conditions
+          axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
+          
           const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/users/me`, {
-            headers: {
-              Authorization: `Bearer ${storedToken}`
-            },
             withCredentials: true
           });
           console.log('User data fetched:', response.data);
@@ -105,6 +132,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch (error) {
         console.error('Auth initialization error:', error);
+        // Clear the Authorization header
+        delete axios.defaults.headers.common['Authorization'];
         localStorage.removeItem('token');
         if (mounted) {
           setToken(null);
@@ -129,13 +158,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       console.log('Attempting login with:', { email, userType });
       console.log('API URL:', `${import.meta.env.VITE_API_URL}/api/auth/login`);
-      console.log('Request payload:', { email, password });
       
       const response = await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
         email,
         password,
       }, {
-        withCredentials: true,
+        withCredentials: true, // Important for receiving cookies
         headers: {
           'Content-Type': 'application/json'
         }
@@ -154,10 +182,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         throw new Error('Invalid user type');
       }
 
-      console.log('Login successful, setting token and user data');
-      localStorage.setItem('token', newToken);
+      console.log('Login successful, setting user data');
+      
+      // For backwards compatibility, still store token in localStorage
+      // but primarily rely on HttpOnly cookies
+      if (newToken) {
+        localStorage.setItem('token', newToken);
+      }
+      
+      // Set auth state
       setToken(newToken);
       setUser(userData);
+      
+      // Set the token in axios defaults for immediate use
+      if (newToken) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+      }
 
       // Redirect based on role
       if (userData.role === 'EMPLOYEE') {

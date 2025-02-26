@@ -2,6 +2,37 @@
 
 All notable changes to the Moving Company Management System will be documented in this file.
 
+## 26.02.2025
+
+### Comprehensive Security Overhaul
+- Implemented HttpOnly cookies for JWT tokens:
+  - Migrated authentication tokens from localStorage to HttpOnly cookies
+  - Enhanced cookie security with SameSite and Secure attributes
+  - Added proper cookie expiration and domain configuration
+  - Implemented secure logout endpoint with cookie clearing
+  - Maintained backward compatibility with token-based auth
+- Added request signing for sensitive operations:
+  - Implemented HMAC-SHA256 cryptographic signing
+  - Added timestamp validation to prevent replay attacks
+  - Applied signing to critical endpoints (user verification, deletion)
+  - Created frontend utilities for automatic request signing
+  - Added validation middleware with detailed logging
+- Enhanced security headers:
+  - Implemented comprehensive Permissions-Policy
+  - Expanded Content Security Policy with additional directives
+  - Added protection for workers, manifests, and form targets
+  - Restricted access to browser features (camera, geolocation, etc.)
+- Fixed CSRF implementation:
+  - Replaced complex csurf library with custom double-submit cookie pattern
+  - Fixed race conditions in authentication system
+  - Added detailed error reporting and debugging
+  - Improved frontend token handling
+- Created security-focused API client:
+  - Automatic request signing for sensitive endpoints
+  - Proper cookie handling for authentication
+  - Consistent error management
+  - Type-safe API responses
+
 ## 18.02.2025
 
 ### Enhanced Security Implementation

@@ -108,7 +108,16 @@ export const csrfProtection = csrf({
   sessionKey: 'sessionId',
   ignoreMethods: ['GET', 'HEAD', 'OPTIONS'],
   value: (req: Request) => {
-    const headerToken = req.headers['x-csrf-token'];
+    // Check both headers for the token
+    const headerToken = req.headers['x-csrf-token'] || req.headers['xsrf-token'];
+    
+    debug.info('Token Validation', {
+      method: req.method,
+      path: req.path,
+      tokenExists: !!headerToken,
+      headerNames: Object.keys(req.headers)
+        .filter(key => key.toLowerCase().includes('csrf') || key.toLowerCase().includes('xsrf'))
+    });
     
     // Add additional security checks
     if (typeof headerToken !== 'string' || headerToken.length < 32) {
@@ -151,6 +160,18 @@ export const handleCSRFError = (err: any, req: Request, res: Response, next: Nex
     delete sanitizedHeaders.authorization;
     delete sanitizedHeaders.cookie;
     
+    // Log CSRF-related headers to help debug
+    const csrfHeaders = Object.keys(req.headers)
+      .filter(key => key.toLowerCase().includes('csrf') || key.toLowerCase().includes('xsrf'))
+      .reduce((obj, key) => {
+        obj[key] = req.headers[key];
+        return obj;
+      }, {} as Record<string, any>);
+    
+    const cookieHeader = req.headers.cookie;
+    const csrfCookie = cookieHeader && cookieHeader.split(';')
+      .find(cookie => cookie.trim().startsWith('XSRF-TOKEN='));
+    
     const errorData = {
       path: req.path,
       method: req.method,
@@ -159,19 +180,22 @@ export const handleCSRFError = (err: any, req: Request, res: Response, next: Nex
       timestamp: new Date().toISOString(),
       sessionPresent: !!req.session,
       environment: process.env.NODE_ENV,
-      requestId: (req as any).id || 'unknown'
+      requestId: (req as any).id || 'unknown',
+      csrfHeaders,
+      csrfCookiePresent: !!csrfCookie,
+      sessionToken: req.session?.csrfTokenHash ? 'present' : 'missing'
     };
 
-    debug.error('CSRF Attack Detected', errorData);
+    debug.error('CSRF Validation Failed', errorData);
 
     // TODO: In production, integrate with your error logging service
     if (process.env.NODE_ENV === 'production') {
-      // Example: errorLoggingService.log('CSRF_ATTACK', errorData);
+      // Example: errorLoggingService.log('CSRF_ERROR', errorData);
     }
 
     return res.status(403).json({
       status: 'error',
-      message: 'Invalid request',
+      message: 'Invalid CSRF token',
       code: 'CSRF_ERROR',
       requestId: errorData.requestId // Allow tracking issues in production
     });
@@ -221,6 +245,7 @@ export const setCSRFToken = (req: Request, res: Response, next: NextFunction) =>
     const token = tokenBuffer.toString('base64url');
     req.csrfToken = () => token;
     
+    // Store the raw token in session for verification
     const hashedToken = crypto.createHash('sha256')
       .update(token + (req.session?.id || '')) // Add session ID to the hash
       .digest('hex');
@@ -230,7 +255,7 @@ export const setCSRFToken = (req: Request, res: Response, next: NextFunction) =>
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'X-XSS-Protection': '1; mode=block',
-      'X-CSRF-Token': hashedToken,
+      'X-CSRF-Token': token, // Send the actual token, not the hash
       'Content-Security-Policy': `default-src 'self'; frame-ancestors 'none'; script-src 'self' 'nonce-${token}'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; connect-src 'self';`,
       'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
       'Permissions-Policy': 'geolocation=(), microphone=(), camera=()',
